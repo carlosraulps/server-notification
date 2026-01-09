@@ -1,6 +1,6 @@
 # Slurm Cluster Monitor & Discord Bot
 
-A Python script that monitors a Slurm-managed HPC cluster for idle nodes and sends real-time notifications to a Discord channel. Designed for researchers who need to jump on free resources immediately.
+A Python script that monitors a Slurm-managed HPC cluster for idle nodes and sends real-time notifications to a Discord channel. Designed for researchers who need to jump on free resources immediately. :D
 
 ## Features
 
