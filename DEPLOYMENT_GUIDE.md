@@ -87,16 +87,17 @@ To make sure the bot runs 24/7 and restarts on reboot:
    ```
 
 2. **Paste the following content**:
-   (Make sure the paths match. If you are user `ubuntu`, `/home/ubuntu` is correct).
+   *(Note: The `User` is set to `carlosraul_crlsrl` based on your system info. Adjust if deploying elsewhere.)*
    ```ini
    [Unit]
    Description=Slurm Cluster Monitor Bot
    After=network.target
 
    [Service]
-   User=ubuntu
-   WorkingDirectory=/home/ubuntu/server-notification
-   ExecStart=/usr/bin/python3 /home/ubuntu/server-notification/monitor.py
+   User=carlosraul_crlsrl
+   WorkingDirectory=/home/carlosraul_crlsrl/server-notification
+   Environment="PYTHONUNBUFFERED=1"
+   ExecStart=/usr/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
    Restart=always
    RestartSec=10
 

@@ -3,12 +3,13 @@ Description=Slurm Cluster Monitor Bot
 After=network.target
 
 [Service]
-# Replace 'ubuntu' with your actual username on the VPS
-User=ubuntu
-# Adjust the path to where you cloned the repo
-WorkingDirectory=/home/ubuntu/server-notification
-# Adjust the path to your python executable (or virtualenv)
-ExecStart=/usr/bin/python3 /home/ubuntu/server-notification/monitor.py
+# User from system info
+User=carlosraul_crlsrl
+# Directory from system info
+WorkingDirectory=/home/carlosraul_crlsrl/server-notification
+# Paths
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/usr/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
 Restart=always
 RestartSec=10
 
