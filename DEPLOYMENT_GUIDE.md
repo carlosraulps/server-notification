@@ -89,34 +89,15 @@ pip install -r requirements.txt
 
 To make sure the bot runs 24/7 and restarts on reboot:
 
-1. **Create the service file**:
+1. **Copy the service file**:
+   Since the `bot.service` file is already in your folder, just copy it to the systemd directory:
    ```bash
-   sudo nano /etc/systemd/system/bot.service
+   sudo cp bot.service /etc/systemd/system/bot.service
    ```
 
-2. **Paste the following content**:
-   *(Note: The `User` is `carlosraul_crlsrl` and it uses the `venv` path. Adjust if deploying elsewhere.)*
-   ```ini
-   [Unit]
-   Description=Slurm Cluster Monitor Bot
-   After=network.target
-
-   [Service]
-   User=carlosraul_crlsrl
-   WorkingDirectory=/home/carlosraul_crlsrl/server-notification
-   Environment="PYTHONUNBUFFERED=1"
-   # Points to the VENV python executable
-   ExecStart=/home/carlosraul_crlsrl/server-notification/venv/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
-   Restart=always
-   RestartSec=10
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-3. **Enable and Start**:
+2. **Reload and Start**:
    ```bash
-   # Reload systemd
+   # Reload systemd to recognize the new file
    sudo systemctl daemon-reload
 
    # Enable service to start on boot
