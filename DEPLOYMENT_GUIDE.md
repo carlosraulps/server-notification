@@ -33,12 +33,18 @@ This guide will help you run your `monitor.py` script 24/7 on a free Google Clou
 Run the following commands on the server (copy-paste):
 
 ```bash
-# Update package list and install Python pip
-sudo apt update && sudo apt install python3-pip -y
+# Update package list and install Python pip and venv
+sudo apt update && sudo apt install python3-pip python3-venv -y
 
 # Create a directory
 mkdir ~/server-notification
 cd ~/server-notification
+
+# Create a virtual environment (Fixes "externally-managed-environment" error)
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate
 ```
 
 ## 4. Upload Files
@@ -73,8 +79,10 @@ git clone https://github.com/your-username/your-repo.git .
 
 ## 5. Install Dependencies
 
+Make sure your virtual environment is activated (you should see `(venv)` in your prompt).
+
 ```bash
-pip3 install -r requirements.txt
+pip install -r requirements.txt
 ```
 
 ## 6. Run in Background (Systemd)
@@ -87,7 +95,7 @@ To make sure the bot runs 24/7 and restarts on reboot:
    ```
 
 2. **Paste the following content**:
-   *(Note: The `User` is set to `carlosraul_crlsrl` based on your system info. Adjust if deploying elsewhere.)*
+   *(Note: The `User` is `carlosraul_crlsrl` and it uses the `venv` path. Adjust if deploying elsewhere.)*
    ```ini
    [Unit]
    Description=Slurm Cluster Monitor Bot
@@ -97,7 +105,8 @@ To make sure the bot runs 24/7 and restarts on reboot:
    User=carlosraul_crlsrl
    WorkingDirectory=/home/carlosraul_crlsrl/server-notification
    Environment="PYTHONUNBUFFERED=1"
-   ExecStart=/usr/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
+   # Points to the VENV python executable
+   ExecStart=/home/carlosraul_crlsrl/server-notification/venv/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
    Restart=always
    RestartSec=10
 

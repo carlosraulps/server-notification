@@ -9,7 +9,8 @@ User=carlosraul_crlsrl
 WorkingDirectory=/home/carlosraul_crlsrl/server-notification
 # Paths
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/usr/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
+# Use the virtual environment python
+ExecStart=/home/carlosraul_crlsrl/server-notification/venv/bin/python3 /home/carlosraul_crlsrl/server-notification/monitor.py
 Restart=always
 RestartSec=10
 
