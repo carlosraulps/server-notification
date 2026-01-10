@@ -1,3 +1,4 @@
 fabric
 discord.py
 python-dotenv
+google-genai

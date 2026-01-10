@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands, tasks
 from fabric import Connection, Config
 from dotenv import load_dotenv
+from google import genai
 
 # Configure logging
 logging.basicConfig(
@@ -30,7 +31,8 @@ HEAD_NODE_USER = "carlos"
 HEAD_NODE_PASSWORD = os.getenv("SSH_PASSWORD_HUK")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-TARGET_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
 
 TARGET_PARTITIONS = ["alto", "medio", "normal"]
@@ -92,8 +94,6 @@ class SlurmClient:
                     mem = parts[4]
 
                     if part in TARGET_PARTITIONS:
-                        # Handle grouped nodes slightly gracefully?
-                        # For now assume mostly individual or just take the name string
                         nodes[nodelist] = {
                             "partition": part,
                             "state": state,
@@ -108,22 +108,18 @@ class SlurmClient:
 
     def get_node_details(self, node_list):
         """
-        Runs scontrol show node <node_list> to get exact memory usage.
+        Runs scontrol show node <node_list> --future to get precise memory usage.
         Returns: Dict {node_name: {RealMemory, AllocMem, CPUAlloc, CPUTot}}
         """
         details = {}
         conn = None
         try:
             conn = self.get_connection()
-            cmd = f"scontrol show node {','.join(node_list)}"
+            # Use --future to ensure we get full configured specs
+            cmd = f"scontrol show node {','.join(node_list)} --future"
             result = conn.run(cmd, hide=True)
             
             if result.ok:
-                # Parse output. It's multi-line per node.
-                # NodeName=huk120 Arch=x86_64 CoresPerSocket=24
-                # CPUAlloc=0 CPUTot=48 CPULoad=0.01
-                # RealMemory=128000 AllocMem=0 FreeMem=127000
-                
                 current_node = None
                 for line in result.stdout.split('\n'):
                     line = line.strip()
@@ -132,10 +128,12 @@ class SlurmClient:
                         details[current_node] = {}
                     
                     if current_node:
-                        # Extract key-values
-                        for kv in line.split():
-                            if "=" in kv:
-                                k, v = kv.split("=", 1)
+                        # Extract key-values. Split by space but respecting quotes matches is hard, 
+                        # but Slurm output is usually "Key=Value Key=Value"
+                        tokens = line.split()
+                        for tok in tokens:
+                            if "=" in tok:
+                                k, v = tok.split("=", 1)
                                 if k in ["RealMemory", "AllocMem", "CPUAlloc", "CPUTot", "CPULoad"]:
                                     details[current_node][k] = v
         except Exception as e:
@@ -149,7 +147,6 @@ class SlurmClient:
         conn = None
         try:
             conn = self.get_connection()
-            # %u = user, %L = time left, %S = start time
             result = conn.run("squeue -h -o %u", hide=True)
             if not result.ok:
                 return 0, {}
@@ -172,6 +169,45 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 slurm = SlurmClient()
 
+# Gemini Setup
+gemini_client = None
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
+    """Uses Gemini 2.5 Flash Lite to generate a fun summary."""
+    if not gemini_client:
+        return "New resources available! (Enable Gemini for smart summaries)"
+
+    try:
+        # Prepare context
+        prompt = f"""
+        You are an HPC Cluster Assistant.
+        
+        **New Available Nodes:**
+        {new_nodes_data}
+        
+        **Queue Context:**
+        Active Jobs: {active_job_count}
+        Top Users: {queue_data}
+        
+        **Instructions:**
+        1. Write a short notification for researchers.
+        2. Group by partition.
+        3. Highlight capability (high CPU vs high RAM).
+        4. Mention queue hogs if relevant.
+        5. Be concise, use emojis. No markdown tables.
+        """
+        
+        response = gemini_client.models.generate_content(
+            model='gemini-2.0-flash-lite-preview-02-05',
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        logger.error(f"Gemini Error: {e}")
+        return "New resources available! (AI Summary Failed)"
+
 # State Tracking for Anti-Spam
 previously_free_nodes = set()
 
@@ -180,41 +216,28 @@ async def on_ready():
     logger.info(f'Logged in as {bot.user} (ID: {bot.user.id})')
     monitor_nodes.start()
 
-@tasks.loop(minutes=CHECK_INTERVAL/60) # Convert seconds to minutes for the loop decorator if using minutes
-# But better to use seconds directly
-# @tasks.loop(seconds=CHECK_INTERVAL) requires integer, so let's stick to seconds parameter
+@tasks.loop(seconds=CHECK_INTERVAL)
 async def monitor_nodes():
     global previously_free_nodes
     logger.info("Running background monitoring task...")
     
-    channel_id = TARGET_CHANNEL_ID
-    if not channel_id:
+    if not DISCORD_CHANNEL_ID:
         logger.warning("No DISCORD_CHANNEL_ID set. Skipping alerts.")
         return
 
-    channel = bot.get_channel(int(channel_id))
+    channel = bot.get_channel(int(DISCORD_CHANNEL_ID))
     if not channel:
-        logger.warning(f"Could not find channel with ID {channel_id}")
+        logger.warning(f"Could not find channel with ID {DISCORD_CHANNEL_ID}")
         return
 
-    # Use run_in_executor for blocking SSH calls
     nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
     if not nodes:
         return
 
     current_free_ids = set()
-    potential_nodes = []
-
-    # Identify potential candidates (Idle or Mixed)
     for name, data in nodes.items():
         state = data['state'].lower().replace("*", "")
         if "idle" in state or "mixed" in state:
-            potential_nodes.append(name)
-            
-            # Simple "Idle" check for the simplified set tracking
-            # We track "available" nodes.
-            # However, for mixed nodes, we need deeper check.
-            # Let's assume for the "set" logic, we track name only.
             current_free_ids.add(name)
 
     # Determine NEW alerts (Diff check)
@@ -222,18 +245,19 @@ async def monitor_nodes():
     previously_free_nodes = current_free_ids
     
     if not newly_free:
-        return # No new nodes
+        return
 
     logger.info(f"New nodes detected: {newly_free}")
 
-    # Fetch details only for the new nodes to be precise
-    # Run scontrol
+    # Fetch details
     details = await bot.loop.run_in_executor(None, slurm.get_node_details, list(newly_free))
     
-    # Generate Alert Embed
+    # Prepare Data for AI
+    ai_node_data = []
+
+    # Generate Embed
     embed = discord.Embed(
         title="🟢 New Resources Available!",
-        description="The following nodes have just become available/freed up.",
         color=0x00ff00,
         timestamp=datetime.datetime.utcnow()
     )
@@ -243,35 +267,45 @@ async def monitor_nodes():
         node_detail = details.get(node_name)
         
         if node_basic and node_detail:
-            # Calculate Free RAM
-            real_mem = int(node_detail.get('RealMemory', 0))
-            alloc_mem = int(node_detail.get('AllocMem', 0))
-            free_mem = real_mem - alloc_mem
+            # Fix 1MB Bug: Convert raw (MB) to GB
+            real_mem_mb = int(node_detail.get('RealMemory', 0))
+            alloc_mem_mb = int(node_detail.get('AllocMem', 0))
+            
+            # If scontrol returns 1 or 0 inexplicably, rely on sinfo fallback? 
+            # Ideally --future fixed this.
+            
+            free_mem_gb = (real_mem_mb - alloc_mem_mb) / 1024
+            total_mem_gb = real_mem_mb / 1024
             
             cpu_tot = int(node_detail.get('CPUTot', 0))
             cpu_alloc = int(node_detail.get('CPUAlloc', 0))
             free_cpu = cpu_tot - cpu_alloc
+            
+            ai_node_data.append({
+                "name": node_name,
+                "partition": node_basic['partition'],
+                "free_cpu": free_cpu,
+                "free_ram_gb": f"{free_mem_gb:.1f}",
+                "total_ram_gb": f"{total_mem_gb:.1f}"
+            })
 
             embed.add_field(
                 name=f"🖥️ {node_name} ({node_basic['partition']})",
                 value=(
-                    f"**State:** {node_basic['state']}\n"
                     f"**Free CPU:** {free_cpu} / {cpu_tot}\n"
-                    f"**Free RAM:** {free_mem}MB / {real_mem}MB"
+                    f"**Free RAM:** {free_mem_gb:.1f}GB / {total_mem_gb:.1f}GB"
                 ),
                 inline=False
             )
     
-    # Add Queue Context
+    # Get Queue & AI Summary
     total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
-    top_users = sorted(users.items(), key=lambda x: x[1], reverse=True)[:5]
-    user_str = ", ".join([f"{u} ({c})" for u, c in top_users])
     
-    embed.add_field(
-        name="Queue Context",
-        value=f"Active Jobs: {total_jobs}\nTop Users: {user_str}",
-        inline=False
-    )
+    # Generate AI Description
+    ai_summary = await bot.loop.run_in_executor(None, summarize_with_gemini, ai_node_data, users, total_jobs)
+    
+    # Set AI summary as description
+    embed.description = ai_summary
 
     await channel.send(embed=embed)
 
@@ -279,13 +313,12 @@ async def monitor_nodes():
 async def status_command(ctx):
     """Shows a visual summary of the cluster."""
     msg = await ctx.send("🔄 Fetching cluster status...")
-    
     nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
+    
     if not nodes:
         await msg.edit(content="❌ Failed to fetch node data.")
         return
 
-    # Group by partition
     partitions = {}
     for name, data in nodes.items():
         p = data['partition']
@@ -295,8 +328,6 @@ async def status_command(ctx):
     embed = discord.Embed(title="📊 Cluster Status", color=0x3498db)
     
     for part, nlist in partitions.items():
-        # Build a visual blocks representation
-        # Green square for idle, etc.
         visuals = []
         for name, state in nlist:
             state_key = next((k for k in STATE_COLORS if k in state.lower()), "unknown")
@@ -314,27 +345,26 @@ async def status_command(ctx):
 async def inspect_command(ctx, node_name: str):
     """Detailed stats for a specific node."""
     msg = await ctx.send(f"🔍 Inspecting {node_name}...")
-    
     details = await bot.loop.run_in_executor(None, slurm.get_node_details, [node_name])
     data = details.get(node_name)
     
     if not data:
-        await msg.edit(content=f"❌ Could not get details for {node_name}. check name.")
+        await msg.edit(content=f"❌ Could not get details for {node_name}.")
         return
 
-    # State extraction (requires basic info too, but let's rely on scontrol details mainly)
-    # scontrol provides State usually, but our parser might need update if we want it from there.
-    # For now, just show the resources.
-    
     cpu_alloc = int(data.get('CPUAlloc', 0))
     cpu_tot = int(data.get('CPUTot', 0))
-    mem_real = int(data.get('RealMemory', 0))
-    mem_alloc = int(data.get('AllocMem', 0))
+    
+    mem_real_mb = int(data.get('RealMemory', 0))
+    mem_alloc_mb = int(data.get('AllocMem', 0))
+    mem_used_gb = mem_alloc_mb / 1024
+    mem_total_gb = mem_real_mb / 1024
+    
     load = data.get('CPULoad', 'N/A')
 
     embed = discord.Embed(title=f"Node: {node_name}", color=0x3498db)
     embed.add_field(name="CPU Usage", value=f"{cpu_alloc}/{cpu_tot} Cores\nLoad: {load}", inline=True)
-    embed.add_field(name="Memory Usage", value=f"{mem_alloc}MB / {mem_real}MB Used\nFree: {mem_real - mem_alloc}MB", inline=True)
+    embed.add_field(name="Memory Usage", value=f"{mem_used_gb:.1f}GB / {mem_total_gb:.1f}GB Used", inline=True)
 
     await msg.edit(content=None, embed=embed)
 
@@ -349,7 +379,7 @@ async def queue_command(ctx):
     if users:
         sorted_users = sorted(users.items(), key=lambda x: x[1], reverse=True)
         lines = [f"**{u}**: {c} jobs" for u, c in sorted_users]
-        embed.add_field(name="User Activity", value="\n".join(lines[:15]), inline=False) # Limit to 15
+        embed.add_field(name="User Activity", value="\n".join(lines[:15]), inline=False)
     else:
         embed.add_field(name="User Activity", value="No active jobs.", inline=False)
 
@@ -363,11 +393,8 @@ if __name__ == "__main__":
         try:
             bot.run(DISCORD_BOT_TOKEN)
         except discord.errors.PrivilegedIntentsRequired:
-            logger.critical("🛑 PRIVILEGED INTENTS MISSING!")
-            logger.critical("You must enable 'Message Content Intent' in the Discord Developer Portal.")
-            logger.critical("Go to: https://discord.com/developers/applications -> Your App -> Bot -> Privileged Gateway Intents")
+            logger.critical("🛑 PRIVILEGED INTENTS MISSING! Enable 'Message Content Intent' in Portal.")
         except discord.errors.LoginFailure:
-            logger.critical("🛑 INVALID TOKEN!")
-            logger.critical("Your DISCORD_BOT_TOKEN is incorrect. Please check .env")
+            logger.critical("🛑 INVALID TOKEN! Check .env")
         except Exception as e:
             logger.critical(f"🛑 CRITICAL ERROR: {e}")

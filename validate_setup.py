@@ -57,11 +57,19 @@ def main():
     checks.append(check_import("discord"))
     checks.append(check_import("fabric"))
     checks.append(check_import("dotenv"))
-    
+    checks.append(check_import("google.genai")) # Check Gemini lib
+
     # 3. Check Config
     if check_import("dotenv"):
         print("\nChecking Configuration...")
         checks.append(check_env_vars())
+
+        # Additional Gemini Check
+        gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            print("⚠️ GEMINI_API_KEY is missing (AI Summaries will be disabled)")
+        else:
+            print("✅ GEMINI_API_KEY found")
     
     print("\n" + "="*30)
     if all(checks):
