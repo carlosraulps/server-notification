@@ -359,7 +359,15 @@ if __name__ == "__main__":
     if not DISCORD_BOT_TOKEN:
         logger.error("DISCORD_BOT_TOKEN not found in .env")
     else:
-        # Pass monitor_nodes to the loop if needed? No, @tasks.loop handles it.
-        # But we need to handle the loop seconds config
         monitor_nodes.change_interval(seconds=CHECK_INTERVAL)
-        bot.run(DISCORD_BOT_TOKEN)
+        try:
+            bot.run(DISCORD_BOT_TOKEN)
+        except discord.errors.PrivilegedIntentsRequired:
+            logger.critical("🛑 PRIVILEGED INTENTS MISSING!")
+            logger.critical("You must enable 'Message Content Intent' in the Discord Developer Portal.")
+            logger.critical("Go to: https://discord.com/developers/applications -> Your App -> Bot -> Privileged Gateway Intents")
+        except discord.errors.LoginFailure:
+            logger.critical("🛑 INVALID TOKEN!")
+            logger.critical("Your DISCORD_BOT_TOKEN is incorrect. Please check .env")
+        except Exception as e:
+            logger.critical(f"🛑 CRITICAL ERROR: {e}")
