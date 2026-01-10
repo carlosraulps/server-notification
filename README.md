@@ -48,27 +48,14 @@ A hybrid Discord Bot that monitors a Slurm-managed HPC cluster. It sends alerts 
 
 ## Deployment (Quick Start)
 
-If you are deploying this for the first time or updating on your VPS, follow these commands:
+**One-Click Update:**
+Simply run these two commands to update the code, dependencies, and restart the service automatically:
 
-### 1. Update Code on VPS
 ```bash
 git pull origin master
+python3 deploy.py
 ```
 
-### 2. Update Linux Service (If files changed)
-```bash
-# Copy the service file to systemd
-sudo cp bot.service /etc/systemd/system/bot.service
-
-# Reload and restart
-sudo systemctl daemon-reload
-sudo systemctl enable bot
-sudo systemctl restart bot
-```
-
-### 3. Check Logs
-```bash
-journalctl -u bot -f
-```
+*The script manages `pip install`, `systemctl restart`, and shows you the logs.*
 
 For a detailed guide on setting up the Google Cloud environment, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
