@@ -106,16 +106,52 @@ class SlurmClient:
             if conn: conn.close()
         return nodes
 
-    def get_node_details(self, node_list):
+    def get_node_memory_direct(self, node_name):
         """
-        Runs scontrol show node <node_list> --future to get precise memory usage.
-        Returns: Dict {node_name: {RealMemory, AllocMem, CPUAlloc, CPUTot}}
+        SSHs directly into the node to get accurate memory usage (Total, Used, Free).
+        Returns: Dict { 'total_gb': float, 'used_gb': float, 'free_gb': float }
+        """
+        stats = {'total_gb': 0.0, 'used_gb': 0.0, 'free_gb': 0.0}
+        conn = None
+        try:
+            conn = self.get_connection()
+            # Command to run on the head node: ssh <node_name> "free -m ..."
+            # We filter for the line starting with "Mem:" and grab cols 2 (Total), 3 (Used), 4 (Free)
+            cmd = f"ssh {node_name} \"free -m | grep Mem | awk '{{print \\$2, \\$3, \\$4}}'\""
+            
+            logger.info(f"Checking memory directly via SSH on {node_name}...")
+            result = conn.run(cmd, hide=True, timeout=10) # 10s timeout for node connection
+            
+            if result.ok:
+                parts = result.stdout.strip().split()
+                if len(parts) == 3:
+                    total_mb = int(parts[0])
+                    used_mb = int(parts[1])
+                    free_mb = int(parts[2]) # Or parts[6] for 'available'? usually field 3 is used.
+                    # Actually free -m output: total, used, free, shared, buff/cache, available
+                    # $2=total, $3=used, $4=free. Correct.
+                    
+                    stats['total_gb'] = total_mb / 1024.0
+                    stats['used_gb'] = used_mb / 1024.0
+                    stats['free_gb'] = free_mb / 1024.0
+                    return stats
+                    
+        except Exception as e:
+            logger.error(f"Error in direct SSH memory check for {node_name}: {e}")
+            # Fallback will happen in the caller if this returns default 0s
+        finally:
+            if conn: conn.close()
+        
+        return stats
+
+    def get_node_details_fallback(self, node_list):
+        """
+        Runs scontrol show node <node_list> --future as fallback.
         """
         details = {}
         conn = None
         try:
             conn = self.get_connection()
-            # Use --future to ensure we get full configured specs
             cmd = f"scontrol show node {','.join(node_list)} --future"
             result = conn.run(cmd, hide=True)
             
@@ -128,8 +164,6 @@ class SlurmClient:
                         details[current_node] = {}
                     
                     if current_node:
-                        # Extract key-values. Split by space but respecting quotes matches is hard, 
-                        # but Slurm output is usually "Key=Value Key=Value"
                         tokens = line.split()
                         for tok in tokens:
                             if "=" in tok:
@@ -137,7 +171,7 @@ class SlurmClient:
                                 if k in ["RealMemory", "AllocMem", "CPUAlloc", "CPUTot", "CPULoad"]:
                                     details[current_node][k] = v
         except Exception as e:
-            logger.error(f"Error in scontrol: {e}")
+            logger.error(f"Error in scontrol fallback: {e}")
         finally:
             if conn: conn.close()
         return details
@@ -182,7 +216,7 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
     try:
         # Prepare context
         prompt = f"""
-        You are an HPC Cluster Assistant.
+        You are an HPC Cluster Assistant. I am sending you accurate live data obtained directly from the nodes.
         
         **New Available Nodes:**
         {new_nodes_data}
@@ -194,8 +228,8 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
         **Instructions:**
         1. Write a short notification for researchers.
         2. Group by partition.
-        3. Highlight capability (high CPU vs high RAM).
-        4. Mention queue hogs if relevant.
+        3. **Memory Alert:** If a node has high Free CPU but **low Free RAM** (< 4GB), flag it as 'Memory Constrained'.
+        4. **Formatting:** Output a clean summary. Example: '🟢 **huk121**: 4 Cores Free | 💾 64GB Free RAM (Plenty of space!)'.
         5. Be concise, use emojis. No markdown tables.
         """
         
@@ -222,12 +256,10 @@ async def monitor_nodes():
     logger.info("Running background monitoring task...")
     
     if not DISCORD_CHANNEL_ID:
-        logger.warning("No DISCORD_CHANNEL_ID set. Skipping alerts.")
         return
 
     channel = bot.get_channel(int(DISCORD_CHANNEL_ID))
     if not channel:
-        logger.warning(f"Could not find channel with ID {DISCORD_CHANNEL_ID}")
         return
 
     nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
@@ -249,12 +281,9 @@ async def monitor_nodes():
 
     logger.info(f"New nodes detected: {newly_free}")
 
-    # Fetch details
-    details = await bot.loop.run_in_executor(None, slurm.get_node_details, list(newly_free))
-    
     # Prepare Data for AI
     ai_node_data = []
-
+    
     # Generate Embed
     embed = discord.Embed(
         title="🟢 New Resources Available!",
@@ -262,41 +291,46 @@ async def monitor_nodes():
         timestamp=datetime.datetime.utcnow()
     )
 
+    # Need fallback details for CPU info which we get from fallback scontrol (or existing sinfo)
+    # sinfo has CPUs field "32", but we need allocated vs total.
+    # Fallback scontrol is good for CPU stats usually.
+    fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, list(newly_free))
+
     for node_name in newly_free:
         node_basic = nodes.get(node_name)
-        node_detail = details.get(node_name)
         
-        if node_basic and node_detail:
-            # Fix 1MB Bug: Convert raw (MB) to GB
-            real_mem_mb = int(node_detail.get('RealMemory', 0))
-            alloc_mem_mb = int(node_detail.get('AllocMem', 0))
-            
-            # If scontrol returns 1 or 0 inexplicably, rely on sinfo fallback? 
-            # Ideally --future fixed this.
-            
-            free_mem_gb = (real_mem_mb - alloc_mem_mb) / 1024
-            total_mem_gb = real_mem_mb / 1024
-            
-            cpu_tot = int(node_detail.get('CPUTot', 0))
-            cpu_alloc = int(node_detail.get('CPUAlloc', 0))
-            free_cpu = cpu_tot - cpu_alloc
-            
-            ai_node_data.append({
-                "name": node_name,
-                "partition": node_basic['partition'],
-                "free_cpu": free_cpu,
-                "free_ram_gb": f"{free_mem_gb:.1f}",
-                "total_ram_gb": f"{total_mem_gb:.1f}"
-            })
+        # 1. Get Memory Direct
+        mem_stats = await bot.loop.run_in_executor(None, slurm.get_node_memory_direct, node_name)
+        
+        # 2. Get CPU from fallback (because free -m doesn't show CPU)
+        fallback_data = fallback_details.get(node_name, {})
+        cpu_tot = int(fallback_data.get('CPUTot', node_basic.get('cpus', 0))) # Fallback to sinfo cpus if scontrol fails
+        cpu_alloc = int(fallback_data.get('CPUAlloc', 0))
+        free_cpu = cpu_tot - cpu_alloc
 
-            embed.add_field(
-                name=f"🖥️ {node_name} ({node_basic['partition']})",
-                value=(
-                    f"**Free CPU:** {free_cpu} / {cpu_tot}\n"
-                    f"**Free RAM:** {free_mem_gb:.1f}GB / {total_mem_gb:.1f}GB"
-                ),
-                inline=False
-            )
+        # If direct memory failed (0.0GB), try fallback
+        if mem_stats['total_gb'] == 0:
+             real_mem = int(fallback_data.get('RealMemory', 0))
+             alloc_mem = int(fallback_data.get('AllocMem', 0))
+             mem_stats['total_gb'] = real_mem / 1024.0
+             mem_stats['free_gb'] = (real_mem - alloc_mem) / 1024.0
+
+        ai_node_data.append({
+            "name": node_name,
+            "partition": node_basic['partition'],
+            "free_cpu": free_cpu,
+            "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
+            "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
+        })
+
+        embed.add_field(
+            name=f"🖥️ {node_name} ({node_basic['partition']})",
+            value=(
+                f"**Free CPU:** {free_cpu} / {cpu_tot}\n"
+                f"**Free RAM:** {mem_stats['free_gb']:.1f}GB / {mem_stats['total_gb']:.1f}GB"
+            ),
+            inline=False
+        )
     
     # Get Queue & AI Summary
     total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
@@ -345,26 +379,36 @@ async def status_command(ctx):
 async def inspect_command(ctx, node_name: str):
     """Detailed stats for a specific node."""
     msg = await ctx.send(f"🔍 Inspecting {node_name}...")
-    details = await bot.loop.run_in_executor(None, slurm.get_node_details, [node_name])
-    data = details.get(node_name)
     
-    if not data:
+    # Try Direct SSH first for memory
+    mem_stats = await bot.loop.run_in_executor(None, slurm.get_node_memory_direct, node_name)
+    
+    # Get CPU from scontrol
+    fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, [node_name])
+    data = fallback_details.get(node_name, {})
+    
+    if mem_stats['total_gb'] == 0 and not data:
         await msg.edit(content=f"❌ Could not get details for {node_name}.")
         return
 
     cpu_alloc = int(data.get('CPUAlloc', 0))
     cpu_tot = int(data.get('CPUTot', 0))
-    
-    mem_real_mb = int(data.get('RealMemory', 0))
-    mem_alloc_mb = int(data.get('AllocMem', 0))
-    mem_used_gb = mem_alloc_mb / 1024
-    mem_total_gb = mem_real_mb / 1024
-    
     load = data.get('CPULoad', 'N/A')
+    
+    # Prefer Direct Memory
+    if mem_stats['total_gb'] > 0:
+        mem_display = f"{mem_stats['used_gb']:.1f}GB / {mem_stats['total_gb']:.1f}GB"
+        mem_free = f"{mem_stats['free_gb']:.1f}GB Free"
+    else:
+        # Fallback
+        mem_real_mb = int(data.get('RealMemory', 0))
+        mem_alloc_mb = int(data.get('AllocMem', 0))
+        mem_display = f"{(mem_alloc_mb/1024):.1f}GB / {(mem_real_mb/1024):.1f}GB"
+        mem_free = f"{((mem_real_mb-mem_alloc_mb)/1024):.1f}GB Free"
 
     embed = discord.Embed(title=f"Node: {node_name}", color=0x3498db)
     embed.add_field(name="CPU Usage", value=f"{cpu_alloc}/{cpu_tot} Cores\nLoad: {load}", inline=True)
-    embed.add_field(name="Memory Usage", value=f"{mem_used_gb:.1f}GB / {mem_total_gb:.1f}GB Used", inline=True)
+    embed.add_field(name="Memory Usage", value=f"{mem_display}\n{mem_free}", inline=True)
 
     await msg.edit(content=None, embed=embed)
 
