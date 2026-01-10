@@ -36,6 +36,11 @@ def check_env_vars():
             print("⚠️ DISCORD_CHANNEL_ID is missing (Bot will run but alerts won't work)")
         else:
             print("✅ DISCORD_CHANNEL_ID found")
+
+        if not os.getenv("DISCORD_USER_ID"):
+            print("⚠️ DISCORD_USER_ID is missing (Job completion pings won't work)")
+        else:
+            print("✅ DISCORD_USER_ID found")
             
         return True
     except ImportError:

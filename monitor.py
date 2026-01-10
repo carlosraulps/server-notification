@@ -35,6 +35,10 @@ DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
 
+# Job Tracking Config
+TARGET_CLUSTER_USER = os.getenv("TARGET_CLUSTER_USER", "carlos")
+DISCORD_USER_ID = os.getenv("DISCORD_USER_ID")
+
 TARGET_PARTITIONS = ["alto", "medio", "normal"]
 
 # Node State Colors
@@ -116,20 +120,17 @@ class SlurmClient:
         try:
             conn = self.get_connection()
             # Command to run on the head node: ssh <node_name> "free -m ..."
-            # We filter for the line starting with "Mem:" and grab cols 2 (Total), 3 (Used), 4 (Free)
             cmd = f"ssh {node_name} \"free -m | grep Mem | awk '{{print \\$2, \\$3, \\$4}}'\""
             
             logger.info(f"Checking memory directly via SSH on {node_name}...")
-            result = conn.run(cmd, hide=True, timeout=10) # 10s timeout for node connection
+            result = conn.run(cmd, hide=True, timeout=10)
             
             if result.ok:
                 parts = result.stdout.strip().split()
                 if len(parts) == 3:
                     total_mb = int(parts[0])
                     used_mb = int(parts[1])
-                    free_mb = int(parts[2]) # Or parts[6] for 'available'? usually field 3 is used.
-                    # Actually free -m output: total, used, free, shared, buff/cache, available
-                    # $2=total, $3=used, $4=free. Correct.
+                    free_mb = int(parts[2])
                     
                     stats['total_gb'] = total_mb / 1024.0
                     stats['used_gb'] = used_mb / 1024.0
@@ -138,7 +139,6 @@ class SlurmClient:
                     
         except Exception as e:
             logger.error(f"Error in direct SSH memory check for {node_name}: {e}")
-            # Fallback will happen in the caller if this returns default 0s
         finally:
             if conn: conn.close()
         
@@ -197,6 +197,42 @@ class SlurmClient:
         finally:
             if conn: conn.close()
 
+    def get_user_jobs(self, user):
+        """
+        Gets list of active jobs for a specific user to track completion.
+        Returns: Dict {job_id: {name, state, node}}
+        """
+        jobs = {}
+        conn = None
+        try:
+            conn = self.get_connection()
+            # %i=JobID, %j=Name, %T=State, %N=NodeList
+            cmd = f"squeue -u {user} -h -o \"%i %j %T %N\""
+            result = conn.run(cmd, hide=True)
+            
+            if result.ok:
+                for line in result.stdout.strip().split('\n'):
+                    if not line: continue
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        jid = parts[0]
+                        name = parts[1]
+                        state = parts[2]
+                        node = parts[3]
+                        
+                        jobs[jid] = {
+                            "name": name,
+                            "state": state,
+                            "node": node
+                        }
+        except Exception as e:
+            # logger.error(f"Error fetching user jobs: {e}") 
+            # Don't spam error log if just empty
+            pass
+        finally:
+            if conn: conn.close()
+        return jobs
+
 # Bot Setup
 intents = discord.Intents.default()
 intents.message_content = True 
@@ -242,8 +278,9 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
         logger.error(f"Gemini Error: {e}")
         return "New resources available! (AI Summary Failed)"
 
-# State Tracking for Anti-Spam
+# State Tracking
 previously_free_nodes = set()
+active_user_jobs = {} # Tracks jobs for TARGET_CLUSTER_USER
 
 @bot.event
 async def on_ready():
@@ -253,6 +290,7 @@ async def on_ready():
 @tasks.loop(seconds=CHECK_INTERVAL)
 async def monitor_nodes():
     global previously_free_nodes
+    global active_user_jobs
     logger.info("Running background monitoring task...")
     
     if not DISCORD_CHANNEL_ID:
@@ -262,80 +300,96 @@ async def monitor_nodes():
     if not channel:
         return
 
+    # --- PART 1: NODE MONITORING ---
     nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
-    if not nodes:
-        return
-
-    current_free_ids = set()
-    for name, data in nodes.items():
-        state = data['state'].lower().replace("*", "")
-        if "idle" in state or "mixed" in state:
-            current_free_ids.add(name)
-
-    # Determine NEW alerts (Diff check)
-    newly_free = current_free_ids - previously_free_nodes
-    previously_free_nodes = current_free_ids
     
-    if not newly_free:
-        return
+    if nodes:
+        current_free_ids = set()
+        for name, data in nodes.items():
+            state = data['state'].lower().replace("*", "")
+            if "idle" in state or "mixed" in state:
+                current_free_ids.add(name)
 
-    logger.info(f"New nodes detected: {newly_free}")
-
-    # Prepare Data for AI
-    ai_node_data = []
-    
-    # Generate Embed
-    embed = discord.Embed(
-        title="🟢 New Resources Available!",
-        color=0x00ff00,
-        timestamp=datetime.datetime.utcnow()
-    )
-
-    # Need fallback details for CPU info which we get from fallback scontrol (or existing sinfo)
-    # sinfo has CPUs field "32", but we need allocated vs total.
-    # Fallback scontrol is good for CPU stats usually.
-    fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, list(newly_free))
-
-    # Sort nodes alphanumerically for cleaner output
-    sorted_nodes = sorted(list(newly_free))
-
-    for node_name in sorted_nodes:
-        node_basic = nodes.get(node_name)
+        # Determine NEW alerts (Diff check)
+        newly_free = current_free_ids - previously_free_nodes
+        previously_free_nodes = current_free_ids
         
-        # 1. Get Memory Direct
-        mem_stats = await bot.loop.run_in_executor(None, slurm.get_node_memory_direct, node_name)
+        if newly_free:
+            logger.info(f"New nodes detected: {newly_free}")
+
+            # Prepare Data for AI
+            ai_node_data = []
+            
+            # Generate Embed
+            embed = discord.Embed(
+                title="🟢 New Resources Available!",
+                color=0x00ff00,
+                timestamp=datetime.datetime.utcnow()
+            )
+
+            # Need fallback details for CPU info
+            fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, list(newly_free))
+
+            # Sort nodes alphanumerically for cleaner output
+            sorted_nodes = sorted(list(newly_free))
+
+            for node_name in sorted_nodes:
+                node_basic = nodes.get(node_name)
+                
+                # 1. Get Memory Direct
+                mem_stats = await bot.loop.run_in_executor(None, slurm.get_node_memory_direct, node_name)
+                
+                # 2. Get CPU from fallback
+                fallback_data = fallback_details.get(node_name, {})
+                cpu_tot = int(fallback_data.get('CPUTot', node_basic.get('cpus', 0)))
+                cpu_alloc = int(fallback_data.get('CPUAlloc', 0))
+                free_cpu = cpu_tot - cpu_alloc
+
+                # If direct memory failed, try fallback
+                if mem_stats['total_gb'] == 0:
+                     real_mem = int(fallback_data.get('RealMemory', 0))
+                     alloc_mem = int(fallback_data.get('AllocMem', 0))
+                     mem_stats['total_gb'] = real_mem / 1024.0
+                     mem_stats['free_gb'] = (real_mem - alloc_mem) / 1024.0
+
+                ai_node_data.append({
+                    "name": node_name,
+                    "partition": node_basic['partition'],
+                    "free_cpu": free_cpu,
+                    "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
+                    "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
+                })
+            
+            # Get Queue & AI Summary
+            total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
+            ai_summary = await bot.loop.run_in_executor(None, summarize_with_gemini, ai_node_data, users, total_jobs)
+            embed.description = ai_summary
+            await channel.send(embed=embed)
+
+    # --- PART 2: JOB COMPLETION TRACKING ---
+    if TARGET_CLUSTER_USER and DISCORD_USER_ID:
+        current_jobs = await bot.loop.run_in_executor(None, slurm.get_user_jobs, TARGET_CLUSTER_USER)
         
-        # 2. Get CPU from fallback (because free -m doesn't show CPU)
-        fallback_data = fallback_details.get(node_name, {})
-        cpu_tot = int(fallback_data.get('CPUTot', node_basic.get('cpus', 0))) # Fallback to sinfo cpus if scontrol fails
-        cpu_alloc = int(fallback_data.get('CPUAlloc', 0))
-        free_cpu = cpu_tot - cpu_alloc
+        # If we have previous state (active_user_jobs is not empty), check for diff
+        # If active_user_jobs is empty, it might be first run. But we should assume
+        # if it's empty, user has no jobs. If user HAD jobs and now has NONE, that's a completion.
+        
+        # Calculate completed jobs: IDs in 'active' but not in 'current'
+        completed_ids = set(active_user_jobs.keys()) - set(current_jobs.keys())
+        
+        for jid in completed_ids:
+            job_info = active_user_jobs[jid]
+            # Send DM or Channel Ping? User requested Ping.
+            msg = (
+                f"🔔 <@{DISCORD_USER_ID}> **Calculation Finished!**\n"
+                f"Your job **'{job_info['name']}'** (ID: {jid}) on **{job_info['node']}** is no longer in the queue.\n"
+                f"*Time: {datetime.datetime.now().strftime('%H:%M:%S')}*"
+            )
+            await channel.send(msg)
+            logger.info(f"Alerted user about job completion: {jid}")
 
-        # If direct memory failed (0.0GB), try fallback
-        if mem_stats['total_gb'] == 0:
-             real_mem = int(fallback_data.get('RealMemory', 0))
-             alloc_mem = int(fallback_data.get('AllocMem', 0))
-             mem_stats['total_gb'] = real_mem / 1024.0
-             mem_stats['free_gb'] = (real_mem - alloc_mem) / 1024.0
-
-        ai_node_data.append({
-            "name": node_name,
-            "partition": node_basic['partition'],
-            "free_cpu": free_cpu,
-            "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
-            "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
-        })
-    
-    # Get Queue & AI Summary
-    total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
-    
-    # Generate AI Description
-    ai_summary = await bot.loop.run_in_executor(None, summarize_with_gemini, ai_node_data, users, total_jobs)
-    
-    # Set AI summary as description
-    embed.description = ai_summary
-
-    await channel.send(embed=embed)
+        # Update state
+        active_user_jobs = current_jobs
 
 @bot.command(name='status')
 async def status_command(ctx):
