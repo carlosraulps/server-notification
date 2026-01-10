@@ -34,6 +34,7 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
+TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", -5))
 
 # Job Tracking Config
 TARGET_CLUSTER_USER = os.getenv("TARGET_CLUSTER_USER", "carlos")
@@ -323,10 +324,11 @@ async def monitor_nodes():
             ai_node_data = []
             
             # Generate Embed
+            peru_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
             embed = discord.Embed(
                 title="🟢 New Resources Available!",
                 color=0x00ff00,
-                timestamp=datetime.datetime.utcnow()
+                timestamp=peru_time
             )
 
             # Need fallback details for CPU info
@@ -386,7 +388,7 @@ async def monitor_nodes():
             msg = (
                 f"🔔 <@{DISCORD_USER_ID}> **Calculation Finished!**\n"
                 f"Your job **'{job_info['name']}'** (ID: {jid}) on **{job_info['node']}** is no longer in the queue.\n"
-                f"*Time: {datetime.datetime.now().strftime('%H:%M:%S')}*"
+                f"*Time: {(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)).strftime('%H:%M:%S')}*"
             )
             await channel.send(msg)
             logger.info(f"Alerted user about job completion: {jid}")
