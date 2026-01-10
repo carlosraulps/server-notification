@@ -1,7 +1,8 @@
 __pycache__/
 *.py[cod]
-.env
 .DS_Store
-venv/
 .idea/
 .vscode/
+.gitignore.bak
+.env
+.env.example
