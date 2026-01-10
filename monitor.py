@@ -296,7 +296,10 @@ async def monitor_nodes():
     # Fallback scontrol is good for CPU stats usually.
     fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, list(newly_free))
 
-    for node_name in newly_free:
+    # Sort nodes alphanumerically for cleaner output
+    sorted_nodes = sorted(list(newly_free))
+
+    for node_name in sorted_nodes:
         node_basic = nodes.get(node_name)
         
         # 1. Get Memory Direct
@@ -322,15 +325,6 @@ async def monitor_nodes():
             "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
             "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
         })
-
-        embed.add_field(
-            name=f"🖥️ {node_name} ({node_basic['partition']})",
-            value=(
-                f"**Free CPU:** {free_cpu} / {cpu_tot}\n"
-                f"**Free RAM:** {mem_stats['free_gb']:.1f}GB / {mem_stats['total_gb']:.1f}GB"
-            ),
-            inline=False
-        )
     
     # Get Queue & AI Summary
     total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
@@ -376,8 +370,11 @@ async def status_command(ctx):
     await msg.edit(content=None, embed=embed)
 
 @bot.command(name='inspect')
-async def inspect_command(ctx, node_name: str):
+async def inspect_command(ctx, *args):
     """Detailed stats for a specific node."""
+    # Handle "!inspect huk 120" by joining args
+    node_name = "".join(args).strip()
+    
     msg = await ctx.send(f"🔍 Inspecting {node_name}...")
     
     # Try Direct SSH first for memory
