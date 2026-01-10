@@ -1,33 +1,51 @@
 # Slurm Cluster Monitor & Discord Bot
 
-A Python script that monitors a Slurm-managed HPC cluster for idle nodes and sends real-time notifications to a Discord channel. Designed for researchers who need to jump on free resources immediately. :D
+A hybrid Discord Bot that monitors a Slurm-managed HPC cluster. It sends alerts when nodes become free and responds to commands for detailed cluster status.
 
 ## Features
 
-- **Real-time Monitoring**: Checks `sinfo` for idle nodes in specified partitions (default: `alto`, `medio`, `normal`).
-- **Smart Notifications**: Only alerts when a node *becomes* free (Busy -> Idle transition) to prevent spam.
-- **Discord Integration**: Sends a rich Embed with node specs (CPUs, RAM) and current queue status.
-- **SSH ProxyJump Support**: Handles connections via a bastion host seamlessly using `fabric`.
+- **Real-time Alerts**: Automatically notifies a specific channel when nodes transition from Busy to Idle.
+- **Detailed Inspection**: Interactive commands to check exact RAM/CPU usage of specific nodes (fixing common Slurm reporting bugs).
+- **Cluster Visualization**: `!status` command provides a clean dashboard of node states.
+- **SSH ProxyJump**: Seamlessly connects through bastion hosts.
+
+## Commands
+
+- `!status`: Show a visual map of all partitions and node states.
+- `!inspect <node_name>`: Get detailed specs (RealMemory, AllocMem, CPULoad) for a specific node.
+- `!queue`: Summary of active jobs and top users.
 
 ## Setup
 
-1.  **Install Dependencies**:
+1.  **Discord Bot Setup**:
+    - Go to [Discord Developer Portal](https://discord.com/developers/applications).
+    - Create an Application and add a Bot.
+    - **Enable "Message Content Intent"** (Privileged Gateway Intents).
+    - Copy the **Bot Token**.
+    - Invite the bot to your server.
+
+2.  **Installation**:
     ```bash
+    # Create venv (Debian 12 compatible)
+    python3 -m venv venv
+    source venv/bin/activate
+    
+    # Install
     pip install -r requirements.txt
     ```
 
-2.  **Configuration**:
-    Copy `.env` and fill in your details:
+3.  **Configuration**:
+    Copy `.env.example` to `.env`:
     ```bash
-    cp .env.example .env  # (If you created an example, otherwise just edit .env)
-    # Edit .env with your SSH credentials and Discord Webhook URL
+    cp .env.example .env
     ```
+    Fill in `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`, and your SSH credentials.
 
-3.  **Run**:
+4.  **Run**:
     ```bash
     python monitor.py
     ```
 
 ## Deployment
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for instructions on running this 24/7 on Google Cloud Free Tier.
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for 24/7 hosting instructions (Google Cloud Free Tier).
