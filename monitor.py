@@ -251,7 +251,6 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
 
     try:
         # Prepare context
-        prompt = f"""
         You are an HPC Cluster Assistant. I am sending you accurate live data obtained directly from the nodes.
         
         **New Available Nodes:**
@@ -262,12 +261,13 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
         Top Users: {queue_data}
         
         **Instructions:**
-        1. Write a short notification for researchers.
-        2. Group by partition.
-        3. **Memory Alert:** If a node has high Free CPU but **low Free RAM** (< 4GB), flag it as 'Memory Constrained'.
-        4. **Formatting:** Output a clean summary. Example: '🟢 **huk121**: 4 Cores Free | 💾 64GB Free RAM (Plenty of space!)'.
-        5. Be concise, use emojis. No markdown tables.
-        """
+        Analyze the balance between CPU and RAM for each node:
+        1. **Condition A (Idle):** If State is IDLE, use 🟢. Description: 'Wide Open'.
+        2. **Condition B (Mixed):** If State is MIXED, use 🟡. Description: 'Partially Busy'.
+        3. **Condition C (Bottleneck):** If RAM is high (>100GB) but CPU is low (<4 cores free), write: '⚠️ High CPU Load (RAM available)'. **Do not** say 'Plenty of space' if the CPU is the bottleneck.
+        4. **Clarification:** Explicitly mention that RAM stats are 'per distinct node'.
+        5. **Formatting:** Output a clean summary. Example: 'huk120: 🟡 Mixed | 4/36 Cores Free | 120GB RAM (CPU Heavy)'.
+        6. Be concise. No markdown tables.
         
         response = gemini_client.models.generate_content(
             model='gemini-2.0-flash-lite-preview-02-05',
@@ -355,6 +355,7 @@ async def monitor_nodes():
                 ai_node_data.append({
                     "name": node_name,
                     "partition": node_basic['partition'],
+                    "state": node_basic['state'],
                     "free_cpu": free_cpu,
                     "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
                     "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
@@ -412,11 +413,12 @@ async def status_command(ctx):
     for part, nlist in partitions.items():
         visuals = []
         for name, state in nlist:
-            state_key = next((k for k in STATE_COLORS if k in state.lower()), "unknown")
-            emoji = "🟢" if "idle" in state_key else \
-                    "🟠" if "mixed" in state_key else \
-                    "🔴" if "alloc" in state_key else \
-                    "⚫" if "down" in state_key else "⚪"
+            state_ = state.lower().replace("*", "")
+            emoji = "🟢" if "idle" in state_ else \
+                    "🟡" if "mixed" in state_ else \
+                    "🔴" if "alloc" in state_ else \
+                    "⚫" if "down" in state_ else "⚪"
+            
             visuals.append(f"{emoji} `{name}`")
         
         embed.add_field(name=f"Partition: {part}", value="\n".join(visuals), inline=False)
