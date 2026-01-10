@@ -251,6 +251,7 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
 
     try:
         # Prepare context
+        prompt = f"""
         You are an HPC Cluster Assistant. I am sending you accurate live data obtained directly from the nodes.
         
         **New Available Nodes:**
@@ -268,6 +269,7 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
         4. **Clarification:** Explicitly mention that RAM stats are 'per distinct node'.
         5. **Formatting:** Output a clean summary. Example: 'huk120: 🟡 Mixed | 4/36 Cores Free | 120GB RAM (CPU Heavy)'.
         6. Be concise. No markdown tables.
+        """
         
         response = gemini_client.models.generate_content(
             model='gemini-2.0-flash-lite-preview-02-05',
