@@ -273,23 +273,26 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
     try:
         # Prepare context
         prompt = f"""
-        You are an HPC Cluster Assistant. I am sending you accurate live data obtained directly from the nodes.
-        
-        **New Available Nodes:**
-        {new_nodes_data}
-        
-        **Queue Context:**
-        Active Jobs: {active_job_count}
-        Top Users: {queue_data}
-        
-        **Instructions:**
-        Analyze the balance between CPU and RAM for each node:
-        1. **Condition A (Idle):** If State is IDLE, use 🟢. Description: 'Wide Open'.
-        2. **Condition B (Mixed):** If State is MIXED, use 🟡. Description: 'Partially Busy'.
-        3. **Condition C (Bottleneck):** If RAM is high (>100GB) but CPU is low (<4 cores free), write: '⚠️ High CPU Load (RAM available)'. **Do not** say 'Plenty of space' if the CPU is the bottleneck.
-        4. **Clarification:** Explicitly mention that RAM stats are 'per distinct node'.
-        5. **Formatting:** Output a clean summary. Example: 'huk120: 🟡 Mixed | 4/36 Cores Free | 120GB RAM (CPU Heavy)'.
-        6. Be concise. No markdown tables.
+        # GOAL
+        You are an HPC Cluster Analyst. Your task is to transform raw Slurm JSON data into a human-readable Discord summary.
+
+        # CONTEXT & DATA
+        - Active Jobs in Queue: {active_job_count}
+        - Top Users: {queue_data}
+        - Node Data (JSON): {new_nodes_data}
+
+        # RULES (DO NOT VIOLATE)
+        1. STATE IDENTIFICATION: Use 🟢 for IDLE nodes and 🟡 for MIXED nodes.
+        2. BOTTLENECK LOGIC: If a node has < 4 Free Cores but > 64GB Free RAM, label it as "⚠️ CPU Bottleneck".
+        3. NO TABLES: Output only bullet points.
+        4. PER-NODE STATS: Explicitly state that RAM stats are "per distinct node".
+        5. ERROR HANDLING: If the node data is empty or malformed, respond with: "Resources are shifting; check !status for details."
+
+        # OUTPUT FORMAT
+        Format: [Node Name]: [Emoji] [State] | [Free/Total Cores] Cores Free | [Free RAM] GB RAM ([Contextual Note])
+
+        # EXAMPLE
+        huk120: 🟡 Mixed | 2/36 Cores Free | 128.5GB RAM (⚠️ CPU Bottleneck) ... others
         """
         
         response = gemini_client.models.generate_content(
