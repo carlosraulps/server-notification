@@ -266,44 +266,38 @@ if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
-    """Uses Gemini 2.5 Flash Lite to generate a fun summary."""
-    if not gemini_client:
-        return "New resources available! (Enable Gemini for smart summaries)"
+    # Construct prompt: Combine agent rules with memory/data [cite: 76, 77]
+    prompt = f"""
+    # GOAL (Deterministic Role) [cite: 109, 113]
+    You are a strictly deterministic HPC Analyst. Transform Slurm JSON into bullet points.
 
+    # INFORMATION (Input Data) [cite: 111, 114]
+    - Nodes Available: {new_nodes_data}
+    - Active Queue Jobs: {active_job_count}
+    - User Leaderboard: {queue_data}
+
+    # ACTIONS & CONSTRAINTS (The "Agent Loop" Rules) [cite: 78, 80]
+    1. Only use 🟢 for IDLE (0 cores used) and 🟡 for MIXED (partial cores).
+    2. Define "⚠️ CPU Bottleneck" ONLY if Free Cores < 4 AND Free RAM > 64GB.
+    3. Do not invent nodes not present in the JSON.
+    4. If 'free_ram_gb' is "0.0", report it as "Stale/Check !status". [cite: 92]
+
+    # LANGUAGE (Output Format) [cite: 112, 115]
+    [Node Name]: [Emoji] [State] | [Free CPU]/[Total CPU] Cores | [Free RAM]GB RAM ([Note])
+
+    # TERMINATION CRITERIA [cite: 55, 105]
+    If data is empty, return only: "No new resources detected."
+    """
+    
+    # Generate response using the precise Gemini 3 Flash ID
     try:
-        # Prepare context
-        prompt = f"""
-        # GOAL
-        You are an HPC Cluster Analyst. Your task is to transform raw Slurm JSON data into a human-readable Discord summary.
-
-        # CONTEXT & DATA
-        - Active Jobs in Queue: {active_job_count}
-        - Top Users: {queue_data}
-        - Node Data (JSON): {new_nodes_data}
-
-        # RULES (DO NOT VIOLATE)
-        1. STATE IDENTIFICATION: Use 🟢 for IDLE nodes and 🟡 for MIXED nodes.
-        2. BOTTLENECK LOGIC: If a node has < 4 Free Cores but > 64GB Free RAM, label it as "⚠️ CPU Bottleneck".
-        3. NO TABLES: Output only bullet points.
-        4. PER-NODE STATS: Explicitly state that RAM stats are "per distinct node".
-        5. ERROR HANDLING: If the node data is empty or malformed, respond with: "Resources are shifting; check !status for details."
-
-        # OUTPUT FORMAT
-        Format: [Node Name]: [Emoji] [State] | [Free/Total Cores] Cores Free | [Free RAM] GB RAM ([Contextual Note])
-
-        # EXAMPLE
-        huk120: 🟡 Mixed | 2/36 Cores Free | 128.5GB RAM (⚠️ CPU Bottleneck) ... others
-        """
-        
         response = gemini_client.models.generate_content(
             model='gemini-3-flash-preview',
             contents=prompt
         )
         return response.text
     except Exception as e:
-        logger.error(f"Gemini Error: {e}")
-        return "New resources available! (AI Summary Failed)"
-
+        return f"Agent Feedback Error: {str(e)}" # Log raw result for troubleshooting [cite: 54]
 # State Tracking
 previously_free_nodes = set()
 active_user_jobs = {} # Tracks jobs for TARGET_CLUSTER_USER
