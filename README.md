@@ -119,7 +119,13 @@ This script checks your `.env` integrity and module availability. See `VALIDATIO
 
 ---
 
-## 📋 Prerequisites
-*   **Python 3.9+**
-*   **SSH Access**: The machine running this bot must have SSH access to the Cluster Head Node (via ProxyJump if configured).
-*   **Head Node Permissions**: The user on the Head Node must be able to SSH to compute nodes (e.g., `ssh huk120`) to perform the direct memory check. `scontrol` access is required for job tracking.
+## ⚡ Future: Agentic Integration (Claude/MCP Skill)
+
+This project is architected to evolve into a **Model Context Protocol (MCP) Server** or a **Claude Custom Skill**. By exposing the internal `SlurmClient` methods, external AI Agents can autonomously manage computational workloads.
+
+### How it works:
+1.  **Resource Discovery**: The bot (acting as a Tool) exposes `get_node_states()` to an Agent.
+2.  **Decision Making**: The Agent reads the JSON output (e.g., `{"huk120": {"state": "idle", "ram_free": 128}}`).
+3.  **Autonomous Scheduling**: The Agent decides *"Node huk120 is free and meets the memory requirement"* and triggers a job submission command.
+
+This transforms the bot from a passive **Monitor** into an active **Scheduler**, allowing for fully autonomous HPC workload management.
