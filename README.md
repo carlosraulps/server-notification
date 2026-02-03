@@ -1,61 +1,125 @@
-# Slurm Cluster Monitor & Discord Bot
+# ⚡ AI-Powered Slurm Cluster Monitor
 
-A hybrid Discord Bot that monitors a Slurm-managed HPC cluster. It sends alerts when nodes become free and responds to commands for detailed cluster status.
+A sophisticated Discord Bot designed to monitor High-Performance Computing (HPC) clusters managed by Slurm. It bridges the gap between complex terminal outputs and user-friendly notifications, utilizing **Google Gemini AI** to provide human-readable summaries of cluster resources.
 
-## Features
+## 🌟 Key Features
 
-- **Real-time Alerts**: Automatically notifies a specific channel when nodes transition from Busy to Idle.
-- **Detailed Inspection**: Interactive commands to check exact RAM/CPU usage of specific nodes (fixing common Slurm reporting bugs).
-- **Cluster Visualization**: `!status` command provides a clean dashboard of node states.
-- **SSH ProxyJump**: Seamlessly connects through bastion hosts.
+### 🧠 AI-Enhanced Alerts
+*   **Gemini 2.5 Flash Lite "Analyst"**: Instead of raw numbers, get intelligent summaries like "huk120 is wide open with 128GB RAM" or warnings like "⚠️ High CPU Load (RAM available)".
+*   **Smart Parsing**: Converts raw Slurm data into concise, emoji-coded updates.
 
-## Commands
+### 🔔 Job Completion Notifications
+*   **Personal Pings**: Configure the bot to track *your* specific Slurm user (`squeue -u`).
+*   **Instant Alert**: Get a Discord ping (`@User`) the moment your specific job finishes or disappears from the queue.
+*   **Timezone Aware**: Calculation finish times are adjusted to your local timezone (e.g., Peru/UTC-5).
 
-- `!status`: Show a visual map of all partitions and node states.
-- `!inspect <node_name>`: Get detailed specs (RealMemory, AllocMem, CPULoad) for a specific node.
-- `!queue`: Summary of active jobs and top users.
+### 🛠️ Hardware Accuracy (The "Direct Check")
+*   **Fixes Slurm Reporting Bugs**: Bypasses often inaccurate `scontrol` memory reports by SSHing directly into compute nodes (`ssh <node> free -m`) to get exact available physical RAM.
+*   **Strict State Logic**: 
+    *   🟢 **Idle**: 0 Cores used.
+    *   🟡 **Mixed**: Partial load.
+    *   🔴 **Alloc**: Fully busy.
 
-## Setup
+### 💻 Hybrid Discord Interface
+*   **Real-time Background Loop**: Checks the cluster every `N` seconds (default: 300s).
+*   **Interactive Commands**: 
+    *   `!status`: Visual dashboard of all nodes and partitions.
+    *   `!inspect <node>`: Deep dive into a specific node's CPU load and Memory usage.
+    *   `!queue`: Summary of active jobs and top users.
 
-1.  **Discord Bot Setup**:
-    - Go to [Discord Developer Portal](https://discord.com/developers/applications).
-    - Create an Application and add a Bot.
-    - **Enable "Message Content Intent"** (Privileged Gateway Intents).
-    - Copy the **Bot Token**.
-    - Invite the bot to your server.
+### 🚀 One-Click Deployment
+*   **Automated Updates**: `deploy.py` handles pulling code, updating dependencies, copying Systemd services, and restarting the bot—all in one command.
 
-2.  **Installation**:
-    ```bash
-    # Create venv (Debian 12 compatible)
-    python3 -m venv venv
-    source venv/bin/activate
-    
-    # Install
-    pip install -r requirements.txt
-    ```
+---
 
-3.  **Configuration**:
-    Copy `.env.example` to `.env`:
-    ```bash
-    cp .env.example .env
-    ```
-    Fill in `DISCORD_BOT_TOKEN`, `DISCORD_CHANNEL_ID`, and your SSH credentials.
+## 📂 Project Structure
 
-4.  **Run**:
-    ```bash
-    python monitor.py
-    ```
+```
+├── monitor.py              # 🧠 Main Application Logic (Slurm Client, Discord Bot, AI Integration)
+├── deploy.py               # 🚀 Deployment Automation Script (Run this to update!)
+├── validate_setup.py       # 🕵️ Troubleshooting Tool (Checks env vars, imports, tokens)
+├── bot.service             # ⚙️ Systemd Service configuration
+├── requirements.txt        # 📦 Python Dependencies
+├── .env                    # 🔑 Secrets (API Keys, Passwords, Config)
+├── DEPLOYMENT_GUIDE.md     # ☁️ Specific Guide for GCP/Debian Environments
+└── VALIDATION_PROTOCOL.md  # 🚑 Detailed Troubleshooting Steps
+```
 
-## Deployment (Quick Start)
+---
 
-**One-Click Update:**
-Simply run these two commands to update the code, dependencies, and restart the service automatically:
+## ⚙️ Configuration
+
+Create a `.env` file in the root directory. Use `.env.example` as a template.
+
+### Essential Credentials
+| Variable | Description |
+| :--- | :--- |
+| `SSH_PASSWORD_HUK` | Password for the Head Node. |
+| `SSH_PASSWORD_BASTIAO` | Password for the Bastion Host. |
+| `DISCORD_BOT_TOKEN` | Token from Discord Developer Portal. |
+| `DISCORD_CHANNEL_ID` | Channel ID where alerts will be posted. |
+| `GEMINI_API_KEY` | Google AI Studio Key for intelligent summaries. |
+
+### Feature Flags
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `CHECK_INTERVAL` | How often (in seconds) to query the cluster. | `300` (5 mins) |
+| `TIMEZONE_OFFSET` | UTC Offset for local timestamps (e.g., -5 for Peru). | `-5` |
+| `TARGET_CLUSTER_USER` | The Slurm username to track for job alerts. | `carlos` |
+| `DISCORD_USER_ID` | numerical Discord ID to ping when jobs finish. | (None) |
+
+---
+
+## 🚀 Installation & Usage
+
+### 1. Initial Setup
+```bash
+# Clone the repo
+git clone <repo-url>
+cd server-notification
+
+# Create Virtual Env (Recommended for Debian 12+)
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Dependencies
+pip install -r requirements.txt
+```
+
+### 2. Update & Deploy
+We use `deploy.py` for a hassle-free workflow. This script ensures you are in the venv, updates dependencies, and restarts the systemd service.
 
 ```bash
 git pull origin master
 python3 deploy.py
 ```
 
-*The script manages `pip install`, `systemctl restart`, and shows you the logs.*
+### 3. Manual Run (Debugging)
+To run the bot in the foreground to see logs directly:
+```bash
+python3 monitor.py
+```
 
-For a detailed guide on setting up the Google Cloud environment, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md).
+### 4. Troubleshooting
+If the bot fails to start or ssh connections fail:
+```bash
+python3 validate_setup.py
+```
+This script checks your `.env` integrity and module availability. See `VALIDATION_PROTOCOL.md` for more.
+
+---
+
+## 💬 Bot Command Reference
+
+| Command | Usage | Description |
+| :--- | :--- | :--- |
+| **!status** | `!status` | Shows a visual traffic-light map (🟢🟡🔴) of all cluster partitions. |
+| **!inspect** | `!inspect huk120` | SSHs into `huk120`, runs `free -m`, and shows exact CPU/RAM usage. |
+| **!queue** | `!queue` | Lists total active jobs and a leaderboard of top users. |
+
+---
+
+## 📋 Prerequisites
+*   **Python 3.9+**
+*   **SSH Access**: The machine running this bot must have SSH access to the Cluster Head Node (via ProxyJump if configured).
+*   **Head Node Permissions**: The user on the Head Node must be able to SSH to compute nodes (e.g., `ssh huk120`) to perform the direct memory check. `scontrol` access is required for job tracking.
