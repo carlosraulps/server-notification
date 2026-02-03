@@ -296,7 +296,7 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
         """
         
         response = gemini_client.models.generate_content(
-            model='gemini-2.0-flash-lite-preview-02-05',
+            model='gemini-3-flash-preview',
             contents=prompt
         )
         return response.text
