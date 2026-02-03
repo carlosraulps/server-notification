@@ -56,21 +56,41 @@ class SlurmClient:
     """Handles SSH connections and Slurm commands."""
     
     def get_connection(self):
-        """Establishes the SSH connection."""
-        bastion_config = Config(overrides={'user': BASTION_USER, 'port': BASTION_PORT})
-        bastion = Connection(
-            host=BASTION_HOST,
-            user=BASTION_USER,
-            port=BASTION_PORT,
-            connect_kwargs={"password": BASTION_PASSWORD}
-        )
-        head_node = Connection(
-            host=HEAD_NODE_HOST,
-            user=HEAD_NODE_USER,
-            gateway=bastion,
-            connect_kwargs={"password": HEAD_NODE_PASSWORD}
-        )
-        return head_node
+        """Establishes the SSH connection with retries."""
+        retries = 3
+        for attempt in range(retries):
+            try:
+                bastion_config = Config(overrides={'user': BASTION_USER, 'port': BASTION_PORT})
+                bastion = Connection(
+                    host=BASTION_HOST,
+                    user=BASTION_USER,
+                    port=BASTION_PORT,
+                    connect_kwargs={
+                        "password": BASTION_PASSWORD,
+                        "timeout": 15,
+                        "banner_timeout": 15,
+                        "auth_timeout": 15
+                    }
+                )
+                head_node = Connection(
+                    host=HEAD_NODE_HOST,
+                    user=HEAD_NODE_USER,
+                    gateway=bastion,
+                    connect_kwargs={
+                        "password": HEAD_NODE_PASSWORD,
+                        "timeout": 15,
+                        "banner_timeout": 15,
+                        "auth_timeout": 15
+                    }
+                )
+                # Test connection lightly
+                head_node.open()
+                return head_node
+            except Exception as e:
+                logger.warning(f"Connection attempt {attempt+1}/{retries} failed: {e}")
+                time.sleep(5)
+        
+        raise ConnectionError("Could not establish SSH connection after multiple attempts.")
 
     def get_node_states(self):
         """
@@ -284,6 +304,8 @@ def summarize_with_gemini(new_nodes_data, queue_data, active_job_count):
 # State Tracking
 previously_free_nodes = set()
 active_user_jobs = {} # Tracks jobs for TARGET_CLUSTER_USER
+is_cluster_online = True # Assumption: Online at start
+
 
 @bot.event
 async def on_ready():
@@ -294,6 +316,8 @@ async def on_ready():
 async def monitor_nodes():
     global previously_free_nodes
     global active_user_jobs
+    global is_cluster_online
+    
     logger.info("Running background monitoring task...")
     
     if not DISCORD_CHANNEL_ID:
@@ -303,98 +327,112 @@ async def monitor_nodes():
     if not channel:
         return
 
-    # --- PART 1: NODE MONITORING ---
-    nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
-    
-    if nodes:
-        current_free_ids = set()
-        for name, data in nodes.items():
-            state = data['state'].lower().replace("*", "")
-            if "idle" in state or "mixed" in state:
-                current_free_ids.add(name)
-
-        # Determine NEW alerts (Diff check)
-        newly_free = current_free_ids - previously_free_nodes
-        previously_free_nodes = current_free_ids
+    try:
+        # --- PART 1: NODE MONITORING ---
+        nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
         
-        if newly_free:
-            logger.info(f"New nodes detected: {newly_free}")
+        # If we reach here, connection is GOOD
+        if not is_cluster_online:
+            is_cluster_online = True
+            await channel.send("✅ **Cluster Online**: Connection to Head Node restored!")
+            logger.info("Cluster back online.")
 
-            # Prepare Data for AI
-            ai_node_data = []
+        if nodes:
+            current_free_ids = set()
+            for name, data in nodes.items():
+                state = data['state'].lower().replace("*", "")
+                if "idle" in state or "mixed" in state:
+                    current_free_ids.add(name)
+
+            # Determine NEW alerts (Diff check)
+            newly_free = current_free_ids - previously_free_nodes
+            previously_free_nodes = current_free_ids
             
-            # Generate Embed
-            peru_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
-            embed = discord.Embed(
-                title="🟢 New Resources Available!",
-                color=0x00ff00,
-                timestamp=peru_time
-            )
+            if newly_free:
+                logger.info(f"New nodes detected: {newly_free}")
 
-            # Need fallback details for CPU info
-            fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, list(newly_free))
-
-            # Sort nodes alphanumerically for cleaner output
-            sorted_nodes = sorted(list(newly_free))
-
-            for node_name in sorted_nodes:
-                node_basic = nodes.get(node_name)
+                # Prepare Data for AI
+                ai_node_data = []
                 
-                # 1. Get Memory Direct
-                mem_stats = await bot.loop.run_in_executor(None, slurm.get_node_memory_direct, node_name)
+                # Generate Embed
+                peru_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
+                embed = discord.Embed(
+                    title="🟢 New Resources Available!",
+                    color=0x00ff00,
+                    timestamp=peru_time
+                )
+
+                # Need fallback details for CPU info
+                fallback_details = await bot.loop.run_in_executor(None, slurm.get_node_details_fallback, list(newly_free))
+
+                # Sort nodes alphanumerically for cleaner output
+                sorted_nodes = sorted(list(newly_free))
+
+                for node_name in sorted_nodes:
+                    node_basic = nodes.get(node_name)
+                    
+                    # 1. Get Memory Direct
+                    mem_stats = await bot.loop.run_in_executor(None, slurm.get_node_memory_direct, node_name)
+                    
+                    # 2. Get CPU from fallback
+                    fallback_data = fallback_details.get(node_name, {})
+                    cpu_tot = int(fallback_data.get('CPUTot', node_basic.get('cpus', 0)))
+                    cpu_alloc = int(fallback_data.get('CPUAlloc', 0))
+                    free_cpu = cpu_tot - cpu_alloc
+
+                    # If direct memory failed, try fallback
+                    if mem_stats['total_gb'] == 0:
+                        real_mem = int(fallback_data.get('RealMemory', 0))
+                        alloc_mem = int(fallback_data.get('AllocMem', 0))
+                        mem_stats['total_gb'] = real_mem / 1024.0
+                        mem_stats['free_gb'] = (real_mem - alloc_mem) / 1024.0
+
+                    ai_node_data.append({
+                        "name": node_name,
+                        "partition": node_basic['partition'],
+                        "state": node_basic['state'],
+                        "free_cpu": free_cpu,
+                        "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
+                        "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
+                    })
                 
-                # 2. Get CPU from fallback
-                fallback_data = fallback_details.get(node_name, {})
-                cpu_tot = int(fallback_data.get('CPUTot', node_basic.get('cpus', 0)))
-                cpu_alloc = int(fallback_data.get('CPUAlloc', 0))
-                free_cpu = cpu_tot - cpu_alloc
+                # Get Queue & AI Summary
+                total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
+                ai_summary = await bot.loop.run_in_executor(None, summarize_with_gemini, ai_node_data, users, total_jobs)
+                embed.description = ai_summary
+                await channel.send(embed=embed)
 
-                # If direct memory failed, try fallback
-                if mem_stats['total_gb'] == 0:
-                     real_mem = int(fallback_data.get('RealMemory', 0))
-                     alloc_mem = int(fallback_data.get('AllocMem', 0))
-                     mem_stats['total_gb'] = real_mem / 1024.0
-                     mem_stats['free_gb'] = (real_mem - alloc_mem) / 1024.0
-
-                ai_node_data.append({
-                    "name": node_name,
-                    "partition": node_basic['partition'],
-                    "state": node_basic['state'],
-                    "free_cpu": free_cpu,
-                    "free_ram_gb": f"{mem_stats['free_gb']:.1f}",
-                    "total_ram_gb": f"{mem_stats['total_gb']:.1f}"
-                })
+        # --- PART 2: JOB COMPLETION TRACKING ---
+        if TARGET_CLUSTER_USER and DISCORD_USER_ID:
+            current_jobs = await bot.loop.run_in_executor(None, slurm.get_user_jobs, TARGET_CLUSTER_USER)
             
-            # Get Queue & AI Summary
-            total_jobs, users = await bot.loop.run_in_executor(None, slurm.get_queue_summary)
-            ai_summary = await bot.loop.run_in_executor(None, summarize_with_gemini, ai_node_data, users, total_jobs)
-            embed.description = ai_summary
-            await channel.send(embed=embed)
+            # If we have previous state (active_user_jobs is not empty), check for diff
+            # If active_user_jobs is empty, it might be first run. But we should assume
+            # if it's empty, user has no jobs. If user HAD jobs and now has NONE, that's a completion.
+            
+            # Calculate completed jobs: IDs in 'active' but not in 'current'
+            completed_ids = set(active_user_jobs.keys()) - set(current_jobs.keys())
+            
+            for jid in completed_ids:
+                job_info = active_user_jobs[jid]
+                # Send DM or Channel Ping? User requested Ping.
+                msg = (
+                    f"🔔 <@{DISCORD_USER_ID}> **Calculation Finished!**\n"
+                    f"Your job **'{job_info['name']}'** (ID: {jid}) on **{job_info['node']}** is no longer in the queue.\n"
+                    f"*Time: {(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)).strftime('%H:%M:%S')}*"
+                )
+                await channel.send(msg)
+                logger.info(f"Alerted user about job completion: {jid}")
 
-    # --- PART 2: JOB COMPLETION TRACKING ---
-    if TARGET_CLUSTER_USER and DISCORD_USER_ID:
-        current_jobs = await bot.loop.run_in_executor(None, slurm.get_user_jobs, TARGET_CLUSTER_USER)
-        
-        # If we have previous state (active_user_jobs is not empty), check for diff
-        # If active_user_jobs is empty, it might be first run. But we should assume
-        # if it's empty, user has no jobs. If user HAD jobs and now has NONE, that's a completion.
-        
-        # Calculate completed jobs: IDs in 'active' but not in 'current'
-        completed_ids = set(active_user_jobs.keys()) - set(current_jobs.keys())
-        
-        for jid in completed_ids:
-            job_info = active_user_jobs[jid]
-            # Send DM or Channel Ping? User requested Ping.
-            msg = (
-                f"🔔 <@{DISCORD_USER_ID}> **Calculation Finished!**\n"
-                f"Your job **'{job_info['name']}'** (ID: {jid}) on **{job_info['node']}** is no longer in the queue.\n"
-                f"*Time: {(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)).strftime('%H:%M:%S')}*"
-            )
-            await channel.send(msg)
-            logger.info(f"Alerted user about job completion: {jid}")
+            # Update state
+            active_user_jobs = current_jobs
 
-        # Update state
-        active_user_jobs = current_jobs
+    except Exception as e:
+        logger.error(f"Monitoring Loop Error: {e}")
+        # If we were online, we are now offline
+        if is_cluster_online:
+            is_cluster_online = False
+            await channel.send(f"⚠️ **Cluster Offline**: Connection lost to {BASTION_HOST}. Retrying...")
 
 @bot.command(name='status')
 async def status_command(ctx):
