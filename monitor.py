@@ -80,8 +80,8 @@ class BotState:
 
     def save(self):
         try:
-            # Prune history > 24 hours
-            cutoff = datetime.datetime.now().timestamp() - (24 * 3600)
+            # Prune history > 7 days (168 hours)
+            cutoff = datetime.datetime.now().timestamp() - (7 * 24 * 3600)
             self.queue_history = [
                 entry for entry in self.queue_history 
                 if entry["timestamp"] > cutoff
@@ -500,14 +500,28 @@ async def history(interaction: discord.Interaction):
     counts = [d['count'] for d in history_data]
 
     # Plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(times, counts, marker='o', linestyle='-', color='#3498db')
-    plt.title("Active Job History (Last 24h)")
-    plt.xlabel("Time")
-    plt.ylabel("Jobs")
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-    plt.gcf().autofmt_xdate()
+    # Plot Style: Dark Mode
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    
+    # Plot Data
+    ax.plot(times, counts, marker='o', linestyle='-', color='#00ff9d', linewidth=2, markersize=4)
+    
+    # Styling
+    ax.set_title("Active Job History (Last 7 Days)", fontsize=14, color='white', pad=15)
+    ax.set_xlabel("Time", fontsize=10, color='#cccccc')
+    ax.set_ylabel("Active Jobs", fontsize=10, color='#cccccc')
+    ax.grid(True, linestyle=':', alpha=0.3, color='#555555')
+    
+    # Date Formatting
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+    fig.autofmt_xdate()
+    
+    # Remove frames
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_color('#555555')
+    ax.spines['left'].set_color('#555555')
 
     # Save to Buffer
     buf = io.BytesIO()
