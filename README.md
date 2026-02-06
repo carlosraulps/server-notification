@@ -113,9 +113,10 @@ This script checks your `.env` integrity and module availability. See `VALIDATIO
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
-| **!status** | `!status` | Shows a visual traffic-light map (🟢🟡🔴) of all cluster partitions. |
-| **!inspect** | `!inspect huk120` | SSHs into `huk120`, runs `free -m`, and shows exact CPU/RAM usage. |
-| **!queue** | `!queue` | Lists total active jobs and a leaderboard of top users. |
+| **/status** | `/status` | **(Ephemeral)** Visual traffic-light dashboard (🟢🟡🔴) of all cluster nodes. |
+| **/inspect** | `/inspect node:huk120` | **(Ephemeral)** Deep dive into specific node memory/CPU (Direct SSH check). |
+| **/queue** | `/queue` | **(Ephemeral)** Summary of active jobs and top users. |
+| **/history** | `/history` | **(Public)** Generates a graph of active job counts over the last 24 hours. |
 
 ---
 
