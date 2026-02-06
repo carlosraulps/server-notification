@@ -92,6 +92,30 @@ class SlurmClient:
         
         raise ConnectionError("Could not establish SSH connection after multiple attempts.")
 
+    def is_reachable(self):
+        """
+        Lightweight heartbeat check.
+        Returns True if the Bastion host reachable via TCP/SSH handshake.
+        """
+        try:
+            # Quick connection test with short timeout
+            conn = Connection(
+                host=BASTION_HOST,
+                user=BASTION_USER,
+                port=BASTION_PORT,
+                connect_kwargs={
+                    "password": BASTION_PASSWORD,
+                    "timeout": 5,
+                    "banner_timeout": 5,
+                    "auth_timeout": 5
+                }
+            )
+            conn.open()
+            conn.close()
+            return True
+        except Exception:
+            return False
+
     def get_node_states(self):
         """
         Runs sinfo to get high-level state of nodes in target partitions.
@@ -325,15 +349,25 @@ async def monitor_nodes():
         return
 
     try:
+        # --- HEARTBEAT CHECK ---
+        if not await bot.loop.run_in_executor(None, slurm.is_reachable):
+            if is_cluster_online:
+                 is_cluster_online = False
+                 await channel.send("⚠️ **CRITICAL: Cluster Unreachable**. Monitoring paused until connection returns.")
+                 logger.warning("Heartbeat failed. Cluster marked as Offline.")
+            else:
+                 logger.info("Cluster still offline...")
+            return  # Stop here for this iteration
+
+        # If we reach here, heartbeat passed
+        if not is_cluster_online:
+            is_cluster_online = True
+            await channel.send("✅ **Cluster Connection Restored**. Resuming monitoring.")
+            logger.info("Cluster back online.")
+
         # --- PART 1: NODE MONITORING ---
         nodes = await bot.loop.run_in_executor(None, slurm.get_node_states)
         
-        # If we reach here, connection is GOOD
-        if not is_cluster_online:
-            is_cluster_online = True
-            await channel.send("✅ **Cluster Online**: Connection to Head Node restored!")
-            logger.info("Cluster back online.")
-
         if nodes:
             current_free_ids = set()
             for name, data in nodes.items():
@@ -425,11 +459,11 @@ async def monitor_nodes():
             active_user_jobs = current_jobs
 
     except Exception as e:
-        logger.error(f"Monitoring Loop Error: {e}")
-        # If we were online, we are now offline
+        logger.error(f"GENERIC MONITOR ERROR: {e}")
+        # Only alert if we were previously online to avoid loop-spam
         if is_cluster_online:
             is_cluster_online = False
-            await channel.send(f"⚠️ **Cluster Offline**: Connection lost to {BASTION_HOST}. Retrying...")
+            await channel.send("⚠️ **CRITICAL**: Bot encountered a generic error. Pausing...")
 
 @bot.command(name='status')
 async def status_command(ctx):
