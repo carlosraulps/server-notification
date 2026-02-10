@@ -78,10 +78,11 @@ class SlurmClient:
                 if len(parts) >= 5:
                     part = parts[0].replace("*", "")
                     nodelist, state, cpus, mem = parts[1], parts[2], parts[3], parts[4]
-                    if part in TARGET_PARTITIONS:
-                        nodes[nodelist] = {
-                            "partition": part, "state": state, "cpus": cpus, "memory": mem
-                        }
+                    
+                    # Store all partitions found
+                    nodes[nodelist] = {
+                        "partition": part, "state": state, "cpus": cpus, "memory": mem
+                    }
         except Exception as e:
             logger.error(f"Error in sinfo: {e}")
         finally:
