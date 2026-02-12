@@ -58,12 +58,12 @@ class Analytics(commands.Cog):
             # Convert Timestamp to Datetime
             df['Datetime'] = pd.to_datetime(df['Timestamp'], unit='s')
             
-            # Filter Last 7 Days
-            cutoff = datetime.datetime.now() - datetime.timedelta(days=7)
+            # Filter Last 24 Hours
+            cutoff = datetime.datetime.now() - datetime.timedelta(hours=24)
             df = df[df['Datetime'] > cutoff]
             
             if df.empty:
-                await interaction.followup.send("No recent data (Last 7 days empty).")
+                await interaction.followup.send("No recent data (Last 24h empty).")
                 return
 
             # Plotting Stacked Area Chart
@@ -74,19 +74,19 @@ class Analytics(commands.Cog):
             y_idle = df['Idle']
             y_mixed = df['Mixed']
             y_alloc = df['Alloc']
-            # y_down = df['Down'] # Optional to exclude or include
+            y_down = df['Down']
             
-            # Colors: Green (Idle), Yellow (Mixed), Red (Alloc)
-            colors = ['#00ff00', '#ffcc00', '#ff0000']
-            labels = ['Idle', 'Mixed', 'Allocated']
+            # Colors: Green, Yellow, Red, Grey (User Requested)
+            colors = ['#4CAF50', '#FFC107', '#F44336', '#9E9E9E']
+            labels = ['Idle', 'Mixed', 'Allocated', 'Down']
             
-            ax.stackplot(x, y_idle, y_mixed, y_alloc, labels=labels, colors=colors, alpha=0.8)
+            ax.stackplot(x, y_idle, y_mixed, y_alloc, y_down, labels=labels, colors=colors, alpha=0.9)
             
             # Styling
-            ax.set_title("Cluster Capacity Overview (Last 7 Days)", fontsize=14, color='white', pad=15)
+            ax.set_title("Cluster Capacity & Health (24h)", fontsize=14, color='white', pad=15)
             ax.set_xlabel("Time", fontsize=10, color='#cccccc')
             ax.set_ylabel("Node Count", fontsize=10, color='#cccccc')
-            ax.legend(loc='upper left', fontsize='small')
+            ax.legend(loc='upper left', fontsize='small', framealpha=0.2)
             ax.grid(True, linestyle=':', alpha=0.3)
             
             # Date Formatting
