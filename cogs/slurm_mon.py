@@ -125,6 +125,11 @@ class SlurmMon(commands.Cog):
                 analytics_cog = self.bot.get_cog("Analytics")
                 if analytics_cog:
                     analytics_cog.log_status(idle_c, mixed_c, alloc_c, down_c)
+                    
+                    # Log granular node states for Heatmap
+                    # Create map {node: state}
+                    node_state_map = {n: d['state'] for n, d in nodes.items()}
+                    analytics_cog.log_node_states(node_state_map)
                 # -------------------------
 
                 current_free_ids = set()
