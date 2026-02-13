@@ -1,72 +1,101 @@
-# ⚡ AI-Powered Slurm Cluster Monitor
+# ⚡ Slurm Cluster Monitor & Analyst Bot
 
-A sophisticated Discord Bot designed to monitor High-Performance Computing (HPC) clusters managed by Slurm. It bridges the gap between complex terminal outputs and user-friendly notifications, utilizing **Google Gemini AI** to provide human-readable summaries of cluster resources.
+A sophisticated **Discord Bot** designed to monitor High-Performance Computing (HPC) clusters managed by Slurm. It bridges the gap between complex terminal outputs and user-friendly visualizations, utilizing **Google Gemini AI** to provide human-readable summaries and **Matplotlib** for deep analytics.
 
 ## 🌟 Key Features
 
-### 🧠 AI-Enhanced Alerts
-*   **Gemini 2.5 Flash Lite "Analyst"**: Instead of raw numbers, get intelligent summaries like "huk120 is wide open with 128GB RAM" or warnings like "⚠️ High CPU Load (RAM available)".
-*   **Smart Parsing**: Converts raw Slurm data into concise, emoji-coded updates.
+### 🧠 AI-Enhanced "Analyst"
+*   **Gemini 2.5 Integration**: Instead of raw numbers, get intelligent summaries like *"huk120 is wide open with 128GB RAM"* or *"⚠️ High CPU Load on Partition Alto"*.
+*   **Smart Parsing**: Converts raw `sinfo`/`squeue` data into concise, emoji-coded updates.
 
-### 🔔 Job Completion Notifications
-*   **Personal Pings**: Configure the bot to track *your* specific Slurm user (`squeue -u`).
-*   **Instant Alert**: Get a Discord ping (`@User`) the moment your specific job finishes or disappears from the queue.
-*   **Timezone Aware**: Calculation finish times are adjusted to your local timezone (e.g., Peru/UTC-5).
+### � Advanced Visualization
+*   **`/history` (Stacked Area Chart)**: Visualizes the cluster's **Capacity vs Usage** over the last 24 hours. Categories: 🟢 Idle, 🟡 Mixed, 🔴 Allocated, ⚫ Down.
+*   **`/heatmap` (Utilization Grid)**: A temporal heatmap showing the exact state of **every single node** over time. Perfect for spotting stuck nodes or usage patterns.
+*   **`/status` (Dashboard)**: Instant traffic-light view of all partitions and nodes.
 
-### 🛠️ Hardware Accuracy (The "Direct Check")
-*   **Fixes Slurm Reporting Bugs**: Bypasses often inaccurate `scontrol` memory reports by SSHing directly into compute nodes (`ssh <node> free -m`) to get exact available physical RAM.
-*   **Strict State Logic**: 
-    *   🟢 **Idle**: 0 Cores used.
-    *   🟡 **Mixed**: Partial load.
-    *   🔴 **Alloc**: Fully busy.
+### �️ Detective Mode (`/inspect`)
+*   **Deep Inspection**: SSHs directly into nodes to get **real-time hardware stats** (Exact RAM/CPU).
+*   **Context Aware**:
+    *   If **Busy**: Tells you *who* is running *what job* and for *how long*.
+    *   If **Idle**: Tells you *how long* it has been idle (e.g., "Idle since 14:30").
 
-### 💻 Hybrid Discord Interface
-*   **Real-time Background Loop**: Checks the cluster every `N` seconds (default: 300s).
-*   **Interactive Commands**: 
-    *   `!status`: Visual dashboard of all nodes and partitions.
-    *   `!inspect <node>`: Deep dive into a specific node's CPU load and Memory usage.
-    *   `!queue`: Summary of active jobs and top users.
+### 🔔 Smart Alerts
+*   **Job Completion**: Pings you the moment your specific job finishes or crashes.
+*   **Auto-Discovery**: Automatically finds new partitions and nodes—no configuration needed.
+*   **Resilience**: Handles SSH timeouts, Bastion jumps, and connection drops gracefully.
 
-### 🚀 One-Click Deployment
-*   **Automated Updates**: `deploy.py` handles pulling code, updating dependencies, copying Systemd services, and restarting the bot—all in one command.
+---
+
+## 🏗️ Architecture & Workflow
+
+The bot is built on a modular **Cogs** architecture to ensure scalability and robustness.
+
+```mermaid
+graph TD
+    User((User)) -->|Slash Command| Discord[Discord API]
+    Discord -->|Interaction| Bot[Bot Entry Point]
+    
+    subgraph "🤖 Slurm Bot Core"
+        Bot --> Loader{Cogs Loader}
+        Loader -->|Load| CogMon[Slurm Mon Cog]
+        Loader -->|Load| CogCmd[Commands Cog]
+        Loader -->|Load| CogAna[Analytics Cog]
+        
+        CogMon -->|State Tracking| Data[(History Data)]
+        CogAna -->|Read & Plot| Data
+        
+        CogMon -->|Summarize| Gemini[Google Gemini AI]
+    end
+    
+    subgraph "� HPC Infrastructure"
+        CogCmd -->|Request Info| Client[Slurm Client]
+        CogMon -->|Poll Status| Client
+        
+        Client -->|SSH Tunnel| Bastion[Bastion Host]
+        Bastion -->|SSH| Head[Head Node]
+        Head -->|sinfo/squeue| Compute[Compute Nodes]
+    end
+    
+    CogAna -->|Upload Graph| Discord
+    Gemini -->|Summary Text| Discord
+```
 
 ---
 
 ## 📂 Project Structure
 
-```
-├── monitor.py              # 🧠 Main Application Logic (Slurm Client, Discord Bot, AI Integration)
-├── deploy.py               # 🚀 Deployment Automation Script (Run this to update!)
-├── validate_setup.py       # 🕵️ Troubleshooting Tool (Checks env vars, imports, tokens)
-├── bot.service             # ⚙️ Systemd Service configuration
-├── requirements.txt        # 📦 Python Dependencies
-├── .env                    # 🔑 Secrets (API Keys, Passwords, Config)
-├── DEPLOYMENT_GUIDE.md     # ☁️ Specific Guide for GCP/Debian Environments
-└── VALIDATION_PROTOCOL.md  # 🚑 Detailed Troubleshooting Steps
+```text
+server-notification/
+├── bot_entry.py            # 🚀 Main Entry Point (Loads Cogs & Starts Bot)
+├── deploy.py               # �️ Deployment Automation (Updates & Restarts Systemd)
+├── utils/
+│   └── slurm_client.py     # � SSH Client (Context Managers, Retries, Parsing)
+├── cogs/
+│   ├── slurm_mon.py        # 🔄 Background Loop (Polling, AI Logic, Alerts)
+│   ├── analytics.py        # � Data Science (Pandas, Matplotlib, Heatmaps)
+│   └── commands.py         # 💬 Slash Commands (/status, /inspect, etc.)
+├── data/
+│   ├── history.csv         # � Aggregate Stats (for /history)
+│   └── node_history.jsonl  # 📜 Granular Node Data (for /heatmap)
+├── requirements.txt        # � Dependencies (Pandas, Fabric, Discord.py)
+└── .env                    # 🔑 Configuration Secrets
 ```
 
 ---
 
 ## ⚙️ Configuration
 
-Create a `.env` file in the root directory. Use `.env.example` as a template.
+Create a `.env` file in the root directory (template: `.env.example`).
 
-### Essential Credentials
 | Variable | Description |
 | :--- | :--- |
 | `SSH_PASSWORD_HUK` | Password for the Head Node. |
 | `SSH_PASSWORD_BASTIAO` | Password for the Bastion Host. |
 | `DISCORD_BOT_TOKEN` | Token from Discord Developer Portal. |
-| `DISCORD_CHANNEL_ID` | Channel ID where alerts will be posted. |
 | `GEMINI_API_KEY` | Google AI Studio Key for intelligent summaries. |
-
-### Feature Flags
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `CHECK_INTERVAL` | How often (in seconds) to query the cluster. | `300` (5 mins) |
-| `TIMEZONE_OFFSET` | UTC Offset for local timestamps (e.g., -5 for Peru). | `-5` |
-| `TARGET_CLUSTER_USER` | The Slurm username to track for job alerts. | `carlos` |
-| `DISCORD_USER_ID` | numerical Discord ID to ping when jobs finish. | (None) |
+| `CHECK_INTERVAL` | Polling frequency in seconds (default: 300). |
+| `TARGET_CLUSTER_USER` | Slurm username to track for job alerts. |
+| `DISCORD_USER_ID` | Your Discord ID for personal pings. |
 
 ---
 
@@ -74,59 +103,34 @@ Create a `.env` file in the root directory. Use `.env.example` as a template.
 
 ### 1. Initial Setup
 ```bash
-# Clone the repo
 git clone <repo-url>
 cd server-notification
-
-# Create Virtual Env (Recommended for Debian 12+)
 python3 -m venv venv
 source venv/bin/activate
-
-# Install Dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Update & Deploy
-We use `deploy.py` for a hassle-free workflow. This script ensures you are in the venv, updates dependencies, and restarts the systemd service.
-
+### 2. Deployment
+Use the included automation script to update code, install dependencies, and restart the service:
 ```bash
-git pull origin master
 python3 deploy.py
 ```
 
-### 3. Manual Run (Debugging)
-To run the bot in the foreground to see logs directly:
-```bash
-python3 monitor.py
-```
-
-### 4. Troubleshooting
-If the bot fails to start or ssh connections fail:
-```bash
-python3 validate_setup.py
-```
-This script checks your `.env` integrity and module availability. See `VALIDATION_PROTOCOL.md` for more.
+### 3. Usage (Discord)
+| Command | Description |
+| :--- | :--- |
+| **/status** | 🟢 Visual dashboard of all partitions. |
+| **/queue** | 📜 Leaderboard of active jobs and users. |
+| **/history** | 📈 Stacked Area Chart of cluster capacity (24h). |
+| **/heatmap** | 🔥 Temporal heatmap of node utilization. |
+| **/inspect `node`** | 🕵️ Deep dive into a specific node (CPU/RAM/Job). |
 
 ---
 
-## 💬 Bot Command Reference
+## ⚡ Future: Agentic Integration (MCP)
 
-| Command | Usage | Description |
-| :--- | :--- | :--- |
-| **/status** | `/status` | **(Ephemeral)** Visual traffic-light dashboard (🟢🟡🔴) of all cluster nodes. |
-| **/inspect** | `/inspect node:huk120` | **(Ephemeral)** Deep dive into specific node memory/CPU (Direct SSH check). |
-| **/queue** | `/queue` | **(Ephemeral)** Summary of active jobs and top users. |
-| **/history** | `/history` | **(Public)** Generates a graph of active job counts over the last 24 hours. |
-
----
-
-## ⚡ Future: Agentic Integration (Claude/MCP Skill)
-
-This project is architected to evolve into a **Model Context Protocol (MCP) Server** or a **Claude Custom Skill**. By exposing the internal `SlurmClient` methods, external AI Agents can autonomously manage computational workloads.
-
-### How it works:
-1.  **Resource Discovery**: The bot (acting as a Tool) exposes `get_node_states()` to an Agent.
-2.  **Decision Making**: The Agent reads the JSON output (e.g., `{"huk120": {"state": "idle", "ram_free": 128}}`).
-3.  **Autonomous Scheduling**: The Agent decides *"Node huk120 is free and meets the memory requirement"* and triggers a job submission command.
-
-This transforms the bot from a passive **Monitor** into an active **Scheduler**, allowing for fully autonomous HPC workload management.
+This project is architected to evolve into a **Model Context Protocol (MCP) Server**. 
+By exposing `SlurmClient` as a tool, external Agents (like Claude or ChatGPT) could:
+1.  **Read** the cluster state (`get_node_states`).
+2.  **Reason** about resource availability ("Huk120 is free and has 256GB RAM").
+3.  **Act** by scheduling jobs optimally (`sbatch`).
